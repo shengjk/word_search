@@ -21,23 +21,34 @@ import time
 import mmap
 import psutil
 
-def process_document(file_path, doc_type, timeout=300):
+def process_document(file_path, doc_type, timeout=180):  # 减少默认超时时间
     try:
         print(f"\n[文档处理] 开始处理{doc_type}文档")
         print(f"[文档处理] 文件路径: {file_path}")
         start_time = time.time()
         text = ""
 
-        # 检查文件大小
+        # 检查文件大小并设置动态超时
         file_size = os.path.getsize(file_path) / (1024 * 1024)  # 转换为MB
         print(f"[文档处理] 文件大小: {file_size:.2f}MB")
         if file_size > 100:  # 如果文件大于100MB
             print(f"[文档处理] 警告: 文件大小超过100MB，可能需要较长处理时间")
+            timeout = min(timeout * 2, 600)  # 大文件增加超时时间，但不超过10分钟
 
         # 获取当前内存使用情况
         process = psutil.Process()
         memory_info = process.memory_info()
-        print(f"[文档处理] 初始内存使用: {memory_info.rss / 1024 / 1024:.2f}MB")
+        initial_memory = memory_info.rss / 1024 / 1024
+        print(f"[文档处理] 初始内存使用: {initial_memory:.2f}MB")
+
+        # 添加内存监控函数
+        def check_memory_usage():
+            current_memory = process.memory_info().rss / 1024 / 1024
+            memory_increase = current_memory - initial_memory
+            if memory_increase > 1024:  # 如果内存增加超过1GB
+                raise MemoryError(f"内存使用增加过多: {memory_increase:.2f}MB")
+            if time.time() - start_time > timeout:
+                raise TimeoutError(f"处理超时（{timeout}秒）")
 
         if doc_type == 'docx':
             print("\n[Word文档处理] 开始读取文件...")
@@ -89,11 +100,9 @@ def process_document(file_path, doc_type, timeout=300):
                 print(f"[PDF文档处理] 文本提取完成，文本长度: {len(text)} 字符")
 
         print("\n[分词处理] 开始进行分词...")
-        # 优化分词处理
         text_lower = text.lower()
         print(f"[分词处理] 文本预处理完成，准备分词")
-        # 增加分词批处理大小
-        batch_size = 5000
+        batch_size = min(5000, max(1000, int(1000000 / file_size)))  # 根据文件大小动态调整批处理大小
         words = []
         word_positions = defaultdict(list)
         
@@ -101,6 +110,8 @@ def process_document(file_path, doc_type, timeout=300):
         def word_generator(text):
             print("[分词处理] 初始化分词生成器...")
             for i, word in enumerate(jieba.cut(text)):
+                if i % 1000 == 0:  # 增加检查频率
+                    check_memory_usage()
                 yield i, word
 
         # 分批处理分词
