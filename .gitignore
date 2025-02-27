@@ -24,7 +24,6 @@ env/
 
 # PyInstaller
 *.manifest
-*.spec
 
 # Local development settings
 .env
