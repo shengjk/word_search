@@ -11,10 +11,170 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from pathlib import Path
 import docx
 import os
-import PyPDF2
+from pdfminer.high_level import extract_text
 from collections import defaultdict
 import jieba
 from difflib import get_close_matches
+import multiprocessing
+from functools import partial
+import time
+import mmap
+import psutil
+
+def process_document(file_path, doc_type, timeout=300):
+    try:
+        print(f"\n[文档处理] 开始处理{doc_type}文档")
+        print(f"[文档处理] 文件路径: {file_path}")
+        start_time = time.time()
+        text = ""
+
+        # 检查文件大小
+        file_size = os.path.getsize(file_path) / (1024 * 1024)  # 转换为MB
+        print(f"[文档处理] 文件大小: {file_size:.2f}MB")
+        if file_size > 100:  # 如果文件大于100MB
+            print(f"[文档处理] 警告: 文件大小超过100MB，可能需要较长处理时间")
+
+        # 获取当前内存使用情况
+        process = psutil.Process()
+        memory_info = process.memory_info()
+        print(f"[文档处理] 初始内存使用: {memory_info.rss / 1024 / 1024:.2f}MB")
+
+        if doc_type == 'docx':
+            print("\n[Word文档处理] 开始读取文件...")
+            print(f"[Word文档处理] 文件路径: {file_path}")
+            # 使用内存映射优化Word文档读取
+            with open(file_path, 'rb') as f:
+                print("[Word文档处理] 正在加载文档对象...")
+                doc = docx.Document(f)
+                text_parts = []
+                total_paragraphs = len(doc.paragraphs)
+                print(f"[Word文档处理] 文档加载完成，总段落数: {total_paragraphs}")
+                
+                for i, paragraph in enumerate(doc.paragraphs):
+                    if time.time() - start_time > timeout:
+                        raise TimeoutError(f"处理超时（{timeout}秒）")
+                    if paragraph.text.strip():  # 只添加非空段落
+                        text_parts.append(paragraph.text)
+                    if i % 50 == 0:  # 每处理50个段落输出一次进度
+                        progress = (i / total_paragraphs) * 100
+                        elapsed_time = time.time() - start_time
+                        memory_info = process.memory_info()
+                        print(f"[Word文档处理] 进度: {progress:.1f}% ({i}/{total_paragraphs} 段落)")
+                        print(f"[Word文档处理] 已用时间: {elapsed_time:.1f}秒")
+                        print(f"[Word文档处理] 当前内存使用: {memory_info.rss / 1024 / 1024:.1f}MB")
+                        if i > 0:
+                            avg_time_per_para = elapsed_time / i
+                            remaining_paras = total_paragraphs - i
+                            estimated_remaining_time = avg_time_per_para * remaining_paras
+                            print(f"[Word文档处理] 预计剩余时间: {estimated_remaining_time:.1f}秒")
+                
+                text = '\n'.join(text_parts)
+                print(f"\n[Word文档处理] 文档读取完成")
+                print(f"[Word文档处理] 有效段落数: {len(text_parts)}")
+                print(f"[Word文档处理] 文本总长度: {len(text)} 字符")
+                del doc, text_parts  # 释放内存
+        else:  # pdf
+            print("\n[PDF文档处理] 开始读取文件...")
+            print(f"[PDF文档处理] 文件路径: {file_path}")
+            # 使用pdfminer.six优化PDF处理
+            print("[PDF文档处理] 正在提取文本...")
+            extract_start_time = time.time()
+            text = extract_text(file_path)
+            extract_time = time.time() - extract_start_time
+            print(f"[PDF文档处理] 文本提取耗时: {extract_time:.1f}秒")
+            
+            if not text:
+                print(f"[PDF文档处理] 警告: PDF文档可能为空或无法提取文本")
+            else:
+                print(f"[PDF文档处理] 文本提取完成，文本长度: {len(text)} 字符")
+
+        print("\n[分词处理] 开始进行分词...")
+        # 优化分词处理
+        text_lower = text.lower()
+        print(f"[分词处理] 文本预处理完成，准备分词")
+        # 增加分词批处理大小
+        batch_size = 5000
+        words = []
+        word_positions = defaultdict(list)
+        
+        # 使用生成器优化内存使用
+        def word_generator(text):
+            print("[分词处理] 初始化分词生成器...")
+            for i, word in enumerate(jieba.cut(text)):
+                yield i, word
+
+        # 分批处理分词
+        word_gen = word_generator(text_lower)
+        current_batch = []
+        total_words = 0
+        batch_count = 0
+
+        print("[分词处理] 开始批量处理...")
+        segment_start_time = time.time()
+        while True:
+            try:
+                if time.time() - start_time > timeout:
+                    raise TimeoutError(f"处理超时（{timeout}秒）")
+                
+                i, word = next(word_gen)
+                current_batch.append((i, word))
+                
+                if len(current_batch) >= batch_size:
+                    batch_count += 1
+                    batch_start_time = time.time()
+                    
+                    for idx, w in current_batch:
+                        words.append(w)
+                        word_positions[w].append(idx)
+                    total_words += len(current_batch)
+                    
+                    batch_time = time.time() - batch_start_time
+                    segment_time = time.time() - segment_start_time
+                    memory_info = process.memory_info()
+                    
+                    print(f"\n[分词处理] 批次 {batch_count} 处理完成:")
+                    print(f"[分词处理] - 本批处理耗时: {batch_time:.2f}秒")
+                    print(f"[分词处理] - 总耗时: {segment_time:.2f}秒")
+                    print(f"[分词处理] - 当前已处理: {total_words} 个词")
+                    print(f"[分词处理] - 当前词典大小: {len(word_positions)} 个不同词")
+                    print(f"[分词处理] - 当前内存使用: {memory_info.rss / 1024 / 1024:.1f}MB")
+                    print(f"[分词处理] - 平均处理速度: {total_words/segment_time:.1f} 词/秒")
+                    
+                    current_batch = []
+                    
+            except StopIteration:
+                # 处理最后一批
+                if current_batch:
+                    for idx, w in current_batch:
+                        words.append(w)
+                        word_positions[w].append(idx)
+                    total_words += len(current_batch)
+                    print("\n[分词处理] 处理最后一批数据完成")
+                break
+
+        process_time = time.time() - start_time
+        memory_info = process.memory_info()
+        
+        print(f"\n[处理完成] 文档处理结果汇总:")
+        print(f"[处理完成] - 总用时: {process_time:.2f}秒")
+        print(f"[处理完成] - 总词数: {len(words)}")
+        print(f"[处理完成] - 不同词数: {len(word_positions)}")
+        print(f"[处理完成] - 最终内存使用: {memory_info.rss / 1024 / 1024:.1f}MB")
+        print(f"[处理完成] - 平均处理速度: {len(words)/process_time:.1f} 词/秒")
+
+        return {
+            'path': str(file_path),
+            'content': text,
+            'type': doc_type,
+            'word_positions': dict(word_positions),
+            'words': words,
+            'process_time': process_time
+        }
+    except Exception as e:
+        print(f"\n错误: 处理{doc_type}文档 {file_path} 失败")
+        print(f"错误信息: {str(e)}")
+        print(f"错误类型: {type(e).__name__}")
+        return None
 
 class DocumentScanner(QThread):
     progress_updated = pyqtSignal(int)
@@ -25,68 +185,78 @@ class DocumentScanner(QThread):
         self.directory = directory
         self.inverted_index = defaultdict(list)
         self.documents = []
+        self.cpu_count = multiprocessing.cpu_count()
 
-    def build_inverted_index(self, doc_id, text):
-        words = jieba.lcut(text.lower())
-        word_positions = defaultdict(list)
-        for pos, word in enumerate(words):
-            word_positions[word].append(pos)
-            self.inverted_index[word].append((doc_id, pos))
-        return word_positions
+    def build_inverted_index(self, documents):
+        inverted_index = defaultdict(list)
+        for doc_id, doc in enumerate(documents):
+            if doc is None:
+                continue
+            for pos, word in enumerate(doc['words']):
+                inverted_index[word].append((doc_id, pos))
+        return inverted_index
 
     def run(self):
+        print("\n开始扫描文档...")
+        start_time = time.time()
         self.documents = []
         self.inverted_index.clear()
+        
+        # 获取所有文档路径
         docx_files = list(Path(self.directory).rglob('*.docx'))
         pdf_files = list(Path(self.directory).rglob('*.pdf'))
         total_files = len(docx_files) + len(pdf_files)
-        processed_files = 0
-
-        for file_path in docx_files:
-            try:
-                doc = docx.Document(file_path)
-                text = '\n'.join([paragraph.text for paragraph in doc.paragraphs])
-                doc_id = len(self.documents)
-                word_positions = self.build_inverted_index(doc_id, text)
-                self.documents.append({
-                    'path': str(file_path),
-                    'content': text,
-                    'type': 'docx',
-                    'word_positions': word_positions
-                })
-            except Exception as e:
-                print(f"Error processing Word document {file_path}: {e}")
-
-            processed_files += 1
-            self.progress_updated.emit(int(processed_files / total_files * 100))
-
-        for file_path in pdf_files:
-            try:
-                with open(file_path, 'rb') as file:
-                    pdf_reader = PyPDF2.PdfReader(file)
-                    text = '\n'.join([page.extract_text() for page in pdf_reader.pages])
-                    doc_id = len(self.documents)
-                    word_positions = self.build_inverted_index(doc_id, text)
-                    self.documents.append({
-                        'path': str(file_path),
-                        'content': text,
-                        'type': 'pdf',
-                        'word_positions': word_positions
-                    })
-            except Exception as e:
-                print(f"Error processing PDF {file_path}: {e}")
-
-            processed_files += 1
-            self.progress_updated.emit(int(processed_files / total_files * 100))
-
+        
+        print(f"找到 {len(docx_files)} 个Word文档和 {len(pdf_files)} 个PDF文档")
+        
+        if total_files == 0:
+            print("未找到任何文档")
+            self.scan_completed.emit(([], defaultdict(list)))
+            return
+        self.cpu_count = min(self.cpu_count, 4)  # 限制最大进程数
+        batch_size = 10  # 每批处理的文件数
+        
+        # 分批处理Word文档
+        docx_results = []
+        print("\n开始处理Word文档...")
+        for i in range(0, len(docx_files), batch_size):
+            batch_files = docx_files[i:i + batch_size]
+            print(f"处理Word文档批次 {i//batch_size + 1}/{(len(docx_files)-1)//batch_size + 1}")
+            with multiprocessing.Pool(processes=self.cpu_count) as pool:
+                batch_results = list(pool.imap(partial(process_document, doc_type='docx'), batch_files))
+                docx_results.extend([r for r in batch_results if r])
+                progress = min(50, int((i + len(batch_files)) / total_files * 50))
+                self.progress_updated.emit(progress)
+        # 分批处理PDF文档
+        pdf_results = []
+        print("\n开始处理PDF文档...")
+        for i in range(0, len(pdf_files), batch_size):
+            batch_files = pdf_files[i:i + batch_size]
+            print(f"处理PDF文档批次 {i//batch_size + 1}/{(len(pdf_files)-1)//batch_size + 1}")
+            with multiprocessing.Pool(processes=self.cpu_count) as pool:
+                batch_results = list(pool.imap(partial(process_document, doc_type='pdf'), batch_files))
+                pdf_results.extend([r for r in batch_results if r])
+                progress = 50 + min(50, int((i + len(batch_files)) / total_files * 50))
+                self.progress_updated.emit(progress)
+        # 合并结果
+        self.documents = docx_results + pdf_results
+        self.inverted_index = self.build_inverted_index(self.documents)
+        # 清理临时数据
+        for doc in self.documents:
+            doc.pop('words', None)
+        total_time = time.time() - start_time
+        print(f"\n文档扫描完成")
+        print(f"总用时: {total_time:.2f}秒")
+        print(f"成功处理: {len(self.documents)}/{total_files} 个文档")
+        print(f"索引词数量: {len(self.inverted_index)}")
         self.scan_completed.emit((self.documents, self.inverted_index))
-
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Word文档全文检索系统")
         self.setMinimumSize(800, 600)
         self.documents = []
+        self.inverted_index = defaultdict(list)  # 初始化inverted_index
         self.setup_ui()
 
     def setup_ui(self):
@@ -157,17 +327,29 @@ class MainWindow(QMainWindow):
         if not keyword:
             return
 
+        print(f"\n开始搜索关键词: {keyword}")
+        start_time = time.time()
+
+        # 显示进度条
+        self.progress_bar.setVisible(True)
+        self.progress_bar.setValue(0)
+
         # 使用结巴分词处理搜索关键词
         keywords = jieba.lcut(keyword)
+        print(f"分词结果: {', '.join(keywords)}")
         results = []
         doc_scores = defaultdict(float)
+        total_docs = len(self.documents)
 
         # 对每个分词后的关键词进行搜索
         for word in keywords:
-            # 支持模糊匹配
-            similar_words = get_close_matches(word, self.inverted_index.keys(), n=3, cutoff=0.7)
+            # 支持模糊匹配，但限制相似词数量
+            similar_words = get_close_matches(word, self.inverted_index.keys(), n=2, cutoff=0.8)
+            print(f"处理关键词: {word}, 找到相似词: {', '.join(similar_words)}")
             for similar_word in similar_words:
-                for doc_id, pos in self.inverted_index[similar_word]:
+                matches = self.inverted_index[similar_word]
+                print(f"  - 相似词 '{similar_word}' 在 {len(set(doc_id for doc_id, _ in matches))} 个文档中找到匹配")
+                for doc_id, pos in matches:
                     # 根据词频和位置计算文档得分
                     doc = self.documents[doc_id]
                     freq = len(doc['word_positions'][similar_word])
@@ -175,32 +357,54 @@ class MainWindow(QMainWindow):
                     similarity_score = 1.0 if word == similar_word else 0.7  # 完全匹配得分更高
                     doc_scores[doc_id] += freq * position_score * similarity_score
 
+            # 更新进度条
+            progress = int((keywords.index(word) + 1) / len(keywords) * 40)
+            self.progress_bar.setValue(progress)
+
         # 根据得分对文档排序
         scored_docs = [(doc_id, score) for doc_id, score in doc_scores.items()]
         scored_docs.sort(key=lambda x: x[1], reverse=True)
 
-        for doc_id, score in scored_docs:
+        print(f"\n搜索完成，找到 {len(scored_docs)} 个匹配文档")
+        print(f"搜索用时: {time.time() - start_time:.2f}秒")
+
+        # 分页处理，每页显示10个结果
+        page_size = 10
+        total_results = len(scored_docs)
+        current_page = 0
+
+        # 处理第一页结果
+        page_docs = scored_docs[current_page:current_page + page_size]
+        for doc_id, score in page_docs:
             doc = self.documents[doc_id]
             results.append(f"文件: {doc['path']}\n得分: {score:.2f}\n")
             
-            # 获取关键词上下文
+            # 获取关键词上下文，限制上下文数量
             content = doc['content'].lower()
             contexts = []
             for word in keywords:
-                similar_words = get_close_matches(word, self.inverted_index.keys(), n=3, cutoff=0.7)
+                similar_words = get_close_matches(word, self.inverted_index.keys(), n=2, cutoff=0.8)
                 for similar_word in similar_words:
                     positions = doc['word_positions'].get(similar_word, [])
-                    for pos in positions:
-                        start = max(0, content.rfind(' ', 0, pos) - 30)
-                        end = min(len(content), content.find(' ', pos + len(similar_word)) + 30)
+                    # 只获取前两个位置的上下文
+                    for pos in positions[:2]:
+                        start = max(0, content.rfind(' ', 0, pos) - 20)
+                        end = min(len(content), content.find(' ', pos + len(similar_word)) + 20)
                         context = content[start:end].strip()
                         contexts.append(context)
             
             if contexts:
-                results.append(f"上下文:\n" + "\n...".join(contexts[:3]) + "\n\n")
+                results.append(f"上下文:\n" + "\n...".join(contexts[:2]) + "\n\n")
+
+            # 更新进度条
+            progress = 40 + int((page_docs.index((doc_id, score)) + 1) / len(page_docs) * 40)
+            self.progress_bar.setValue(progress)
 
         if results:
-            self.results_display.setText(''.join(results))
+            result_text = ''.join(results)
+            if total_results > page_size:
+                result_text += f"\n--- 显示 {page_size}/{total_results} 个结果 ---\n"
+            self.results_display.setText(result_text)
         else:
             self.results_display.setText("未找到匹配的结果")
 
@@ -222,7 +426,7 @@ class MainWindow(QMainWindow):
         # 高亮所有关键词及其相似词
         cursor.movePosition(QTextCursor.MoveOperation.Start)
         for word in keywords:
-            similar_words = get_close_matches(word, self.inverted_index.keys(), n=3, cutoff=0.7)
+            similar_words = get_close_matches(word, self.inverted_index.keys(), n=2, cutoff=0.8)
             for similar_word in similar_words:
                 cursor.movePosition(QTextCursor.MoveOperation.Start)
                 while True:
@@ -238,6 +442,9 @@ class MainWindow(QMainWindow):
             if cursor.selectedText().lower() == keyword:
                 cursor.mergeCharFormat(format)
             cursor.movePosition(QTextCursor.MoveOperation.Right, QTextCursor.MoveMode.MoveAnchor, -len(keyword) + 1)
+
+        # 完成后隐藏进度条
+        self.progress_bar.setVisible(False)
 
 def main():
     app = QApplication(sys.argv)
