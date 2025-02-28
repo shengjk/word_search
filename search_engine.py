@@ -4,6 +4,7 @@ from collections import defaultdict
 from functools import partial
 import time
 import jieba
+import math
 from difflib import get_close_matches
 from PyQt6.QtCore import QThread, pyqtSignal
 from cache_manager import CacheManager
