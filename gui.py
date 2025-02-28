@@ -65,6 +65,10 @@ class MainWindow(QMainWindow):
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
         if folder:
+            # 清空现有数据
+            self.documents = []
+            self.inverted_index = {}
+            self.results_display.clear()
             # 如果选择了新文件夹，更新路径显示并开始扫描
             self.folder_path.setText(folder)
             # 先停止之前的监视器

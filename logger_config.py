@@ -36,8 +36,8 @@ def setup_logger(name=None, app_name='word_search'):
     # 创建轮转文件处理器
     file_handler = RotatingFileHandler(
         os.path.join(log_dir, 'word_search.log'),
-        maxBytes=20 * 1024 * 1024,  # 20MB
-        backupCount=2,  # 保留2个备份文件
+        maxBytes=40 * 1024 * 1024,  # 40MB
+        backupCount=0,  # 不保留备份文件，直接覆盖
         encoding='utf-8'
     )
     file_handler.setLevel(logging.INFO)

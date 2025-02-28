@@ -30,12 +30,14 @@ class DocumentScanner(QThread):
             return cls._instance
 
     def __init__(self, directory, specific_files=None):
-        if not hasattr(self, '_initialized'):
-            self._initialized = True
-            self.directory = directory
-            self.specific_files = specific_files
-            self.inverted_index = defaultdict(list)
-            self.documents = []
+        # 每次初始化时都重置状态
+        self._initialized = True
+        self.directory = directory
+        self.specific_files = specific_files
+        self.inverted_index = defaultdict(list)
+        self.documents = []
+        # 保留缓存管理器实例，这样可以继续使用已经持久化的缓存数据
+        if not hasattr(self, 'cache_manager'):
             self.cpu_count = multiprocessing.cpu_count()
             self.cache_manager = CacheManager()
 
