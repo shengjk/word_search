@@ -1,23 +1,26 @@
 # -*- mode: python ; coding: utf-8 -*-
 
-
 a = Analysis(
-    ['word_search.py'],
+    ['main.py'],
     pathex=[],
     binaries=[],
     datas=[
-        ('context', 'word_search_context'),  # 仅暴露word_search_context目录
+        ('logs', 'logs'),
+        ('cache_manager.py', '.'),
+        ('document_processor.py', '.'),
+        ('file_watcher.py', '.'),
+        ('gui.py', '.'),
+        ('logger_config.py', '.'),
+        ('search_engine.py', '.'),
     ],
-    hiddenimports=['pickle'],  # 添加pickle模块支持
-    exclude_binaries=True,  # 排除其他二进制文件
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
-    optimize=0,
 )
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -32,7 +35,7 @@ exe = EXE(
     strip=False,
     upx=True,
     upx_exclude=[],
-    runtime_tmpdir=None,  # 禁用临时目录，使用系统缓存目录
+    runtime_tmpdir=None,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
