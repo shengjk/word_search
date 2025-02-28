@@ -10,21 +10,33 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from cache_manager import CacheManager
 import logger_config
 from document_processor import process_document
+import threading
 
 logger = logger_config.setup_logger(__name__)
 
 class DocumentScanner(QThread):
     progress_updated = pyqtSignal(int)
     scan_completed = pyqtSignal(tuple)
+    _instance = None
+    _lock = threading.Lock()
+
+    def __new__(cls, *args, **kwargs):
+        with cls._lock:
+            if cls._instance is None:
+                cls._instance = super(DocumentScanner, cls).__new__(cls)
+                # 在创建实例时就调用父类的初始化方法
+                super(DocumentScanner, cls._instance).__init__()
+            return cls._instance
 
     def __init__(self, directory, specific_files=None):
-        super().__init__()
-        self.directory = directory
-        self.specific_files = specific_files
-        self.inverted_index = defaultdict(list)
-        self.documents = []
-        self.cpu_count = multiprocessing.cpu_count()
-        self.cache_manager = CacheManager()
+        if not hasattr(self, '_initialized'):
+            self._initialized = True
+            self.directory = directory
+            self.specific_files = specific_files
+            self.inverted_index = defaultdict(list)
+            self.documents = []
+            self.cpu_count = multiprocessing.cpu_count()
+            self.cache_manager = CacheManager()
 
     def build_inverted_index(self, documents):
         inverted_index = defaultdict(list)

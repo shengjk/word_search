@@ -18,6 +18,8 @@ a = Analysis(
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
+    exclude_binaries=False,
+    multiprocess=False,
 )
 
 pyz = PYZ(a.pure)
