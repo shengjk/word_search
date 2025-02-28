@@ -12,41 +12,64 @@ class FileWatcher(QObject):
         self.observer = None
         self.handler = None
         self.watching = False
+        self.watched_directory = None
 
     def start_watching(self, directory):
+        if self.watching and self.watched_directory == directory:
+            return
+
         if self.watching:
             self.stop_watching()
 
+        # 先初始化handler
         self.handler = DocFileHandler(self)
+        
+        # 扫描目录下的所有文件
+        self.scan_existing_files(directory)
+
         self.observer = Observer()
         self.observer.schedule(self.handler, directory, recursive=True)
         self.observer.start()
         self.watching = True
+        self.watched_directory = directory
+
+    def scan_existing_files(self, directory):
+        for root, _, files in os.walk(directory):
+            for file in files:
+                file_path = os.path.join(root, file)
+                _, ext = os.path.splitext(file_path)
+                if ext.lower() in [".docx", ".pdf"]:
+                    self.handler.processed_files.add(file_path)
 
     def stop_watching(self):
         if self.observer:
             self.observer.stop()
             self.observer.join()
             self.watching = False
+            self.watched_directory = None
 
 class DocFileHandler(FileSystemEventHandler):
     def __init__(self, watcher):
         super().__init__()
         self.watcher = watcher
-        self.last_event_time = 0
-        self.cooldown = 1  # 冷却时间（秒）
+        self.processed_files = set()
+        self.is_processing = False
 
     def on_created(self, event):
-        if event.is_directory:
+        if event.is_directory or self.is_processing:
             return
             
-        current_time = time.time()
-        if current_time - self.last_event_time < self.cooldown:
+        file_path = event.src_path
+        if file_path in self.processed_files:
             return
 
-        file_path = event.src_path
         _, ext = os.path.splitext(file_path)
         
         if ext.lower() in [".docx", ".pdf"]:
-            self.last_event_time = current_time
-            self.watcher.file_added.emit(file_path)
+            self.is_processing = True
+            try:
+                self.watcher.file_added.emit(file_path)
+            finally:
+                self.processed_files.add(file_path)
+                self.is_processing = False
+            self.is_processing = False

@@ -65,7 +65,11 @@ class MainWindow(QMainWindow):
     def browse_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "选择文件夹")
         if folder:
+            # 如果选择了新文件夹，更新路径显示并开始扫描
             self.folder_path.setText(folder)
+            # 先停止之前的监视器
+            self.file_watcher.stop_watching()
+            # 开始扫描文档
             self.scan_documents(folder)
             # 开始监控文件夹变化
             self.file_watcher.start_watching(folder)
@@ -86,6 +90,8 @@ class MainWindow(QMainWindow):
             self.documents.extend(new_documents)
             # 更新倒排索引
             for word, positions in new_inverted_index.items():
+                if word not in self.inverted_index:
+                    self.inverted_index[word] = []
                 # 调整文档ID以匹配新的位置
                 adjusted_positions = [(len(self.documents) - len(new_documents) + doc_id, pos) 
                                     for doc_id, pos in positions]

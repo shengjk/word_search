@@ -21,7 +21,8 @@ env/
 *.log
 *.tmp
 %TEMP%/
-
+cache/
+logs/
 # PyInstaller
 *.manifest
 

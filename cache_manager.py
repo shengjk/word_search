@@ -12,19 +12,23 @@ logger = logger_config.setup_logger(__name__)
 
 class CacheManager:
     def __init__(self, app_name='word_search'):
-        # 根据操作系统选择合适的缓存目录
-        if sys.platform == 'win32':
-            base_dir = os.getenv('APPDATA')
-            if not base_dir:
-                base_dir = os.path.expanduser('~')
-            self.cache_dir = Path(base_dir) / app_name
-        elif sys.platform == 'darwin':
-            self.cache_dir = Path(os.path.expanduser('~')) / 'Library' / 'Application Support' / app_name
-        else:  # Linux 和其他系统
-            self.cache_dir = Path(os.path.expanduser('~')) / '.cache' / app_name
-        
-        # 确保缓存目录存在
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        # 获取应用程序的基础目录
+        if getattr(sys, 'frozen', False):
+            # 如果是打包后的exe运行
+            base_dir = Path(sys.executable).parent
+        else:
+            # 如果是开发环境运行
+            base_dir = Path(__file__).parent
+
+        # 在应用程序目录下创建cache文件夹
+        try:
+            self.cache_dir = base_dir / 'cache'
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            # 如果无法在应用程序目录创建缓存文件夹，则使用临时目录
+            import tempfile
+            self.cache_dir = Path(tempfile.gettempdir()) / app_name / 'cache'
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.cache_dir / 'document_cache.db'
         logger.info(f"缓存数据库路径: {self.db_path}")
         self.init_database()

@@ -4,19 +4,25 @@ import sys
 from logging.handlers import RotatingFileHandler
 
 def setup_logger(name=None, app_name='word_search'):
-    # 根据操作系统选择合适的日志目录
-    if sys.platform == 'win32':
-        base_dir = os.getenv('APPDATA')
-        if not base_dir:
-            base_dir = os.path.expanduser('~')
-        log_dir = os.path.join(base_dir, app_name, 'logs')
-    elif sys.platform == 'darwin':
-        log_dir = os.path.join(os.path.expanduser('~'), 'Library', 'Application Support', app_name, 'logs')
-    else:  # Linux 和其他系统
-        log_dir = os.path.join(os.path.expanduser('~'), '.local', 'share', app_name, 'logs')
+    # 获取应用程序的基础目录
+    if getattr(sys, 'frozen', False):
+        # 如果是打包后的exe运行
+        base_dir = os.path.dirname(sys.executable)
+    else:
+        # 如果是开发环境运行
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # 在应用程序目录下创建logs文件夹
+    log_dir = os.path.join(base_dir, 'logs')
     
     # 创建日志目录
-    if not os.path.exists(log_dir):
+    try:
+        if not os.path.exists(log_dir):
+            os.makedirs(log_dir, exist_ok=True)
+    except Exception as e:
+        # 如果无法在应用程序目录创建日志文件夹，则使用临时目录
+        import tempfile
+        log_dir = os.path.join(tempfile.gettempdir(), app_name, 'logs')
         os.makedirs(log_dir, exist_ok=True)
 
     # 使用传入的name创建logger实例，如果未提供则使用root logger
