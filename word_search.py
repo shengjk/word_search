@@ -100,16 +100,30 @@ def process_document(file_path, doc_type, timeout=180, cache_manager=None):  # �
             logger.info("\n[PDF文档处理] 开始读取文件...")
             logger.info(f"[PDF文档处理] 文件路径: {file_path}")
             # 使用pdfminer.six优化PDF处理
+            # 检查文件大小，对大文件采取特殊处理
+            if file_size > 50:  # 如果文件大于50MB
+                logger.info(f"[PDF文档处理] 大文件处理模式")
+                timeout = min(timeout, 300)  # 限制最大超时时间为5分钟
+
             logger.info("[PDF文档处理] 正在提取文本...")
             extract_start_time = time.time()
-            text = extract_text(file_path)
-            extract_time = time.time() - extract_start_time
-            logger.info(f"[PDF文档处理] 文本提取耗时: {extract_time:.1f}秒")
-            
-            if not text:
-                logger.info(f"[PDF文档处理] 警告: PDF文档可能为空或无法提取文本")
-            else:
+            try:
+                with open(file_path, 'rb') as pdf_file:
+                    text = extract_text(
+                        pdf_file,
+                        maxpages=50,  # 限制最大页数
+                        caching=True,  # 启用缓存
+                        codec='utf-8'
+                    )
+                    if not text:
+                        raise ValueError("无法提取文本内容")
+                    
+                extract_time = time.time() - extract_start_time
+                logger.info(f"[PDF文档处理] 文本提取耗时: {extract_time:.1f}秒")
                 logger.info(f"[PDF文档处理] 文本提取完成，文本长度: {len(text)} 字符")
+            except Exception as e:
+                logger.info(f"[PDF文档处理] 文本提取失败: {str(e)}")
+                return None
 
         logger.info("\n[分词处理] 开始进行分词...")
         text_lower = text.lower()
