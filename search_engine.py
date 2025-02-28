@@ -106,6 +106,12 @@ def search_documents(documents, inverted_index, keyword):
     doc_scores = defaultdict(float)
     total_docs = len(documents)
 
+    # 计算IDF值
+    idf_scores = {}
+    for word in keywords:
+        doc_freq = len(set(doc_id for doc_id, _ in inverted_index.get(word, [])))
+        idf_scores[word] = math.log(total_docs / (doc_freq + 1)) + 1
+
     # 对每个分词后的关键词进行搜索
     for word in keywords:
         # 支持模糊匹配，但限制相似词数量
@@ -114,11 +120,24 @@ def search_documents(documents, inverted_index, keyword):
         for similar_word in similar_words:
             matches = inverted_index[similar_word]
             logger.info(f"相似词 '{similar_word}' 在 {len(set(doc_id for doc_id, _ in matches))} 个文档中找到匹配")
+            doc_positions = defaultdict(list)
+            
+            # 收集每个文档中的位置信息
             for doc_id, pos in matches:
-                # 根据词频和位置计算文档得分
+                doc_positions[doc_id].append(pos)
+            
+            for doc_id, positions in doc_positions.items():
                 doc = documents[doc_id]
-                freq = len(doc['word_positions'][similar_word])
-                doc_scores[doc_id] += freq / total_docs
+                # 计算TF值
+                tf = len(positions) / len(doc['content'].split())
+                # 计算位置权重
+                position_weights = sum(1 / (pos + 1) for pos in positions)
+                # 计算最终得分：TF-IDF * 位置权重
+                score = tf * idf_scores.get(word, 1.0) * position_weights
+                # 相似词匹配的得分稍微降低
+                if similar_word != word:
+                    score *= 0.8
+                doc_scores[doc_id] += score
 
     # 按得分排序并返回结果
     search_results = []

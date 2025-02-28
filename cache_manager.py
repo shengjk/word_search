@@ -5,11 +5,13 @@ from pathlib import Path
 from datetime import datetime
 import sys
 import logging
+import zlib
+import logger_config
 
-logger = logging.getLogger(__name__)
+logger = logger_config.setup_logger(__name__)
 
 class CacheManager:
-    def __init__(self, app_name='word_search'):
+    def __init__(self, app_name='ip_search'):
         # 根据操作系统选择合适的缓存目录
         if sys.platform == 'win32':
             base_dir = os.getenv('APPDATA')
@@ -36,7 +38,7 @@ class CacheManager:
                     file_path TEXT PRIMARY KEY,
                     last_modified INTEGER,
                     content_hash TEXT,
-                    cache_data TEXT,
+                    cache_data BLOB,
                     created_at INTEGER
                 )
             """)
@@ -61,23 +63,36 @@ class CacheManager:
             logger.warning(f"无法获取文件信息: {file_path}")
             return None
 
-        with sqlite3.connect(str(self.db_path)) as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT cache_data FROM document_cache
-                WHERE file_path = ? AND last_modified = ?
-            """, (str(file_path), file_info['last_modified']))
-            result = cursor.fetchone()
-
-            if result:
-                try:
-                    logger.info(f"找到缓存数据: {file_path}")
-                    return json.loads(result[0])
-                except json.JSONDecodeError as e:
-                    logger.error(f"缓存数据解析失败: {file_path}, 错误: {str(e)}")
+        try:
+            with sqlite3.connect(str(self.db_path)) as conn:
+                cursor = conn.cursor()
+                # 使用流式方式读取BLOB数据
+                cursor.execute("""SELECT cache_data FROM document_cache
+                    WHERE file_path = ? AND last_modified = ?""", 
+                    (str(file_path), file_info['last_modified']))
+                
+                row = cursor.fetchone()
+                if not row:
+                    logger.info(f"未找到缓存数据: {file_path}")
                     return None
-        logger.info(f"未找到缓存数据: {file_path}")
-        return None
+
+                logger.info(f"找到缓存数据: {file_path}")
+                # 使用流式解压缩
+                decompressor = zlib.decompressobj()
+                compressed_data = row[0]
+                decompressed_data = decompressor.decompress(compressed_data)
+                decompressed_data += decompressor.flush()
+
+                return json.loads(decompressed_data)
+        except sqlite3.Error as e:
+            logger.error(f"数据库操作失败: {file_path}, 错误: {str(e)}")
+            return None
+        except (json.JSONDecodeError, zlib.error) as e:
+            logger.error(f"缓存数据解析失败: {file_path}, 错误: {str(e)}")
+            return None
+        except Exception as e:
+            logger.error(f"获取缓存数据时发生未知错误: {file_path}, 错误: {str(e)}")
+            return None
 
     def cache_document(self, file_path, document_data):
         logger.info(f"开始缓存文档: {file_path}")
@@ -87,7 +102,10 @@ class CacheManager:
             return False
 
         try:
-            cache_data = json.dumps(document_data)
+            # 将数据转换为JSON字符串并压缩
+            json_data = json.dumps(document_data)
+            compressed_data = zlib.compress(json_data.encode('utf-8'), level=9)
+            
             with sqlite3.connect(str(self.db_path)) as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
@@ -97,7 +115,7 @@ class CacheManager:
                 """, (
                     str(file_path),
                     file_info['last_modified'],
-                    cache_data,
+                    compressed_data,
                     int(datetime.now().timestamp())
                 ))
                 conn.commit()

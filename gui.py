@@ -5,6 +5,7 @@ from PyQt6.QtGui import QTextCursor, QTextCharFormat, QColor, QTextDocument
 from PyQt6.QtCore import Qt
 from search_engine import DocumentScanner, search_documents
 import logger_config
+import jieba
 
 logger = logger_config.setup_logger(__name__)
 
@@ -103,25 +104,26 @@ class MainWindow(QMainWindow):
 
         # 清空当前显示
         self.results_display.clear()
-        cursor = self.results_display.textCursor()
+        self.results_display.setHtml("")
 
-        # 创建格式
-        normal_format = QTextCharFormat()
-        highlight_format = QTextCharFormat()
-        highlight_format.setBackground(QColor("yellow"))
-
-        # 显示每个文档的结果
+        # 构建HTML内容
+        html_content = ""
         for i, result in enumerate(results):
-            # 添加文档标题
-            cursor.insertText(f"\n文档 {i+1}:\n")
-            cursor.insertText(f"路径: {result['path']}\n")
-            cursor.insertText(f"类型: {result['type'].upper()}\n")
-            cursor.insertText(f"相关度得分: {result['score']:.4f}\n\n")
+            # 添加文档标题和路径（使用HTML格式）
+            html_content += f"\n<p>文档 {i+1}:</p>"
+            html_content += f"<p><b style='font-size: 14px;'>路径: {result['path']}</b></p>"
+            html_content += f"<p>类型: {result['type'].upper()}</p>"
+            html_content += f"<p>相关度得分: {result['score']:.4f}</p>"
 
-            # 显示文档内容预览（最多显示500个字符）
+            # 显示文档内容预览
             content = result['content'][:500] + "..." if len(result['content']) > 500 else result['content']
-            cursor.insertText("内容预览:\n")
-            cursor.insertText(content + "\n\n")
+            # 高亮关键词
+            for kw in jieba.lcut(keyword):
+                content = content.replace(kw, f"<span style='background-color: yellow;'>{kw}</span>")
+            html_content += f"<p>内容预览:</p>"
+            html_content += f"<p>{content}</p><br>"
 
-        self.results_display.setTextCursor(cursor)
+        # 设置HTML内容
+        self.results_display.setHtml(html_content)
+        self.results_display.moveCursor(QTextCursor.MoveOperation.Start)
         self.results_display.ensureCursorVisible()
