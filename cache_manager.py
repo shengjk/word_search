@@ -11,7 +11,7 @@ import logger_config
 logger = logger_config.setup_logger(__name__)
 
 class CacheManager:
-    def __init__(self, app_name='ip_search'):
+    def __init__(self, app_name='word_search'):
         # 根据操作系统选择合适的缓存目录
         if sys.platform == 'win32':
             base_dir = os.getenv('APPDATA')

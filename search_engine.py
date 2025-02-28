@@ -17,9 +17,10 @@ class DocumentScanner(QThread):
     progress_updated = pyqtSignal(int)
     scan_completed = pyqtSignal(tuple)
 
-    def __init__(self, directory):
+    def __init__(self, directory, specific_files=None):
         super().__init__()
         self.directory = directory
+        self.specific_files = specific_files
         self.inverted_index = defaultdict(list)
         self.documents = []
         self.cpu_count = multiprocessing.cpu_count()
@@ -40,59 +41,75 @@ class DocumentScanner(QThread):
         self.documents = []
         self.inverted_index.clear()
         
-        # 获取所有文档路径
-        docx_files = list(Path(self.directory).rglob('*.docx'))
-        pdf_files = list(Path(self.directory).rglob('*.pdf'))
-        total_files = len(docx_files) + len(pdf_files)
-        
-        logger.info(f"找到 {len(docx_files)} 个Word文档和 {len(pdf_files)} 个PDF文档")
-        
-        if total_files == 0:
-            logger.info("未找到任何文档")
+        try:
+            # 获取所有文档路径或使用指定的文件列表
+            if self.specific_files:
+                docx_files = [Path(f) for f in self.specific_files if f.endswith('.docx')]
+                pdf_files = [Path(f) for f in self.specific_files if f.endswith('.pdf')]
+            else:
+                docx_files = list(Path(self.directory).rglob('*.docx'))
+                pdf_files = list(Path(self.directory).rglob('*.pdf'))
+            total_files = len(docx_files) + len(pdf_files)
+            
+            logger.info(f"找到 {len(docx_files)} 个Word文档和 {len(pdf_files)} 个PDF文档")
+            
+            if total_files == 0:
+                logger.info("未找到任何文档")
+                self.scan_completed.emit(([], defaultdict(list)))
+                return
+
+            self.cpu_count = min(self.cpu_count, 4)  # 限制最大进程数
+            batch_size = 10  # 每批处理的文件数
+            
+            # 分批处理Word文档
+            docx_results = []
+            logger.info("\n开始处理Word文档...")
+            for i in range(0, len(docx_files), batch_size):
+                batch_files = docx_files[i:i + batch_size]
+                logger.info(f"处理Word文档批次 {i//batch_size + 1}/{(len(docx_files)-1)//batch_size + 1}")
+                try:
+                    with multiprocessing.Pool(processes=self.cpu_count) as pool:
+                        batch_results = list(pool.imap(partial(process_document, doc_type='docx', cache_manager=self.cache_manager), batch_files))
+                        docx_results.extend([r for r in batch_results if r])
+                        progress = min(50, int((i + len(batch_files)) / total_files * 50))
+                        self.progress_updated.emit(progress)
+                except (BrokenPipeError, EOFError) as e:
+                    logger.error(f"处理Word文档时发生错误: {str(e)}")
+                    continue
+
+            # 分批处理PDF文档
+            pdf_results = []
+            logger.info("\n开始处理PDF文档...")
+            for i in range(0, len(pdf_files), batch_size):
+                batch_files = pdf_files[i:i + batch_size]
+                logger.info(f"处理PDF文档批次 {i//batch_size + 1}/{(len(pdf_files)-1)//batch_size + 1}")
+                try:
+                    with multiprocessing.Pool(processes=self.cpu_count) as pool:
+                        batch_results = list(pool.imap(partial(process_document, doc_type='pdf', cache_manager=self.cache_manager), batch_files))
+                        pdf_results.extend([r for r in batch_results if r])
+                        progress = 50 + min(50, int((i + len(batch_files)) / total_files * 50))
+                        self.progress_updated.emit(progress)
+                except (BrokenPipeError, EOFError) as e:
+                    logger.error(f"处理PDF文档时发生错误: {str(e)}")
+                    continue
+
+            # 合并结果
+            self.documents = docx_results + pdf_results
+            self.inverted_index = self.build_inverted_index(self.documents)
+
+            # 清理临时数据
+            for doc in self.documents:
+                doc.pop('words', None)
+
+            total_time = time.time() - start_time
+            logger.info("文档扫描完成")
+            logger.info(f"总用时: {total_time:.2f}秒")
+            logger.info(f"成功处理: {len(self.documents)}/{total_files} 个文档")
+            logger.info(f"索引词数量: {len(self.inverted_index)}")
+            self.scan_completed.emit((self.documents, self.inverted_index))
+        except Exception as e:
+            logger.error(f"扫描文档时发生错误: {str(e)}")
             self.scan_completed.emit(([], defaultdict(list)))
-            return
-
-        self.cpu_count = min(self.cpu_count, 4)  # 限制最大进程数
-        batch_size = 10  # 每批处理的文件数
-        
-        # 分批处理Word文档
-        docx_results = []
-        logger.info("\n开始处理Word文档...")
-        for i in range(0, len(docx_files), batch_size):
-            batch_files = docx_files[i:i + batch_size]
-            logger.info(f"处理Word文档批次 {i//batch_size + 1}/{(len(docx_files)-1)//batch_size + 1}")
-            with multiprocessing.Pool(processes=self.cpu_count) as pool:
-                batch_results = list(pool.imap(partial(process_document, doc_type='docx', cache_manager=self.cache_manager), batch_files))
-                docx_results.extend([r for r in batch_results if r])
-                progress = min(50, int((i + len(batch_files)) / total_files * 50))
-                self.progress_updated.emit(progress)
-
-        # 分批处理PDF文档
-        pdf_results = []
-        logger.info("\n开始处理PDF文档...")
-        for i in range(0, len(pdf_files), batch_size):
-            batch_files = pdf_files[i:i + batch_size]
-            logger.info(f"处理PDF文档批次 {i//batch_size + 1}/{(len(pdf_files)-1)//batch_size + 1}")
-            with multiprocessing.Pool(processes=self.cpu_count) as pool:
-                batch_results = list(pool.imap(partial(process_document, doc_type='pdf', cache_manager=self.cache_manager), batch_files))
-                pdf_results.extend([r for r in batch_results if r])
-                progress = 50 + min(50, int((i + len(batch_files)) / total_files * 50))
-                self.progress_updated.emit(progress)
-
-        # 合并结果
-        self.documents = docx_results + pdf_results
-        self.inverted_index = self.build_inverted_index(self.documents)
-
-        # 清理临时数据
-        for doc in self.documents:
-            doc.pop('words', None)
-
-        total_time = time.time() - start_time
-        logger.info("文档扫描完成")
-        logger.info(f"总用时: {total_time:.2f}秒")
-        logger.info(f"成功处理: {len(self.documents)}/{total_files} 个文档")
-        logger.info(f"索引词数量: {len(self.inverted_index)}")
-        self.scan_completed.emit((self.documents, self.inverted_index))
 
 def search_documents(documents, inverted_index, keyword):
     if not keyword:

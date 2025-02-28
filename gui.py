@@ -4,8 +4,10 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
 from PyQt6.QtGui import QTextCursor, QTextCharFormat, QColor, QTextDocument
 from PyQt6.QtCore import Qt
 from search_engine import DocumentScanner, search_documents
+from file_watcher import FileWatcher
 import logger_config
 import jieba
+import os
 
 logger = logger_config.setup_logger(__name__)
 
@@ -16,6 +18,9 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(800, 600)
         self.documents = []
         self.inverted_index = {}  # 初始化inverted_index
+        self.is_scanning = False  # 添加扫描状态标志
+        self.file_watcher = FileWatcher()
+        self.file_watcher.file_added.connect(self.handle_new_file)
         self.setup_ui()
 
     def setup_ui(self):
@@ -62,8 +67,37 @@ class MainWindow(QMainWindow):
         if folder:
             self.folder_path.setText(folder)
             self.scan_documents(folder)
+            # 开始监控文件夹变化
+            self.file_watcher.start_watching(folder)
+
+    def handle_new_file(self, file_path):
+        if not self.is_scanning and os.path.exists(file_path):
+            logger.info(f"检测到新文件: {file_path}")
+            # 只处理新文件
+            self.scanner = DocumentScanner(os.path.dirname(file_path), [file_path])
+            self.scanner.progress_updated.connect(self.update_progress)
+            self.scanner.scan_completed.connect(self.handle_new_file_scan_completed)
+            self.scanner.start()
+
+    def handle_new_file_scan_completed(self, scan_result):
+        new_documents, new_inverted_index = scan_result
+        if new_documents:
+            # 将新文档添加到现有文档列表中
+            self.documents.extend(new_documents)
+            # 更新倒排索引
+            for word, positions in new_inverted_index.items():
+                # 调整文档ID以匹配新的位置
+                adjusted_positions = [(len(self.documents) - len(new_documents) + doc_id, pos) 
+                                    for doc_id, pos in positions]
+                self.inverted_index[word].extend(adjusted_positions)
+            
+            # 更新显示
+            docx_count = sum(1 for doc in self.documents if doc.get('type') == 'docx')
+            pdf_count = sum(1 for doc in self.documents if doc.get('type') == 'pdf')
+            self.results_display.setText(f"已扫描 {docx_count} 个Word文档和 {pdf_count} 个PDF文档")
 
     def scan_documents(self, folder):
+        self.is_scanning = True  # 设置扫描状态
         self.progress_bar.setVisible(True)
         self.progress_bar.setValue(0)
         self.scanner = DocumentScanner(folder)
@@ -77,25 +111,25 @@ class MainWindow(QMainWindow):
     def scan_finished(self, scan_result):
         self.documents, self.inverted_index = scan_result
         self.progress_bar.setVisible(False)
+        self.is_scanning = False  # 重置扫描状态
         docx_count = sum(1 for doc in self.documents if doc.get('type') == 'docx')
         pdf_count = sum(1 for doc in self.documents if doc.get('type') == 'pdf')
         self.results_display.setText(f"已扫描 {docx_count} 个Word文档和 {pdf_count} 个PDF文档")
 
     def search_documents(self):
+        if self.is_scanning:  # 检查是否正在扫描
+            self.results_display.setText("文档正在扫描中，请等待扫描完成后再进行搜索")
+            return
+
         keyword = self.search_input.text().lower()
         if not keyword:
             return
-
-        # 显示进度条
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setValue(0)
 
         # 执行搜索
         results = search_documents(self.documents, self.inverted_index, keyword)
 
         # 显示搜索结果
         self.display_search_results(results, keyword)
-        self.progress_bar.setVisible(False)
 
     def display_search_results(self, results, keyword):
         if not results:
