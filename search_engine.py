@@ -58,8 +58,10 @@ class DocumentScanner(QThread):
                 self.scan_completed.emit(([], defaultdict(list)))
                 return
 
-            self.cpu_count = min(self.cpu_count, 4)  # 限制最大进程数
-            batch_size = 10  # 每批处理的文件数
+            # 根据系统CPU核心数动态调整进程数，但不超过系统核心数的75%
+            self.cpu_count = max(2, min(self.cpu_count * 3 // 4, 8))  # 增加最大进程数限制
+            # 根据CPU数量动态调整批处理大小
+            batch_size = max(10, min(20, self.cpu_count * 3))  # 增加批处理大小
             
             # 分批处理Word文档
             docx_results = []
